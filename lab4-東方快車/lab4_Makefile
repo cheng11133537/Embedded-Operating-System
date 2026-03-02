@@ -1,0 +1,15 @@
+CC      := gcc
+CFLAGS  := -Wall -Wextra -O2
+LDFLAGS := 
+
+TARGET := lab5
+
+all: $(TARGET)
+
+$(TARGET): lab5.c
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+
+clean:
+	rm -f $(TARGET)
+
+.PHONY: all clean
