@@ -1,0 +1,1 @@
+在此系統中，select 被用來以非阻塞方式檢查 TCP socket 是否仍然存活，避免網路 I/O 阻塞影像擷取與 YOLO 推論主迴圈，確保即使 Node.js proxy 異常中斷，Gate 端仍能即時回復並重新 accept 連線。

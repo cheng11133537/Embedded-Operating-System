@@ -1,0 +1,20 @@
+CC     := gcc
+CFLAGS := -Wall -Wextra -O2
+LDFLAGS:=
+
+all: server client driver0 driver1
+
+server: server.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+client: client.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+driver0: driver.c
+	$(CC) $(CFLAGS) -DDRIVER_ID=0 -o $@ $< $(LDFLAGS)
+
+driver1: driver.c
+	$(CC) $(CFLAGS) -DDRIVER_ID=1 -o $@ $< $(LDFLAGS)
+
+clean:
+	rm -f server client driver0 driver1

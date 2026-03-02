@@ -1,0 +1,205 @@
+// driver.c (Equipment Device Simulation)
+// Example usage:
+//  ./driver0 10000
+//  ./driver1 10001
+
+//   Request:  GETSTATUS\n
+//   Response: <user_id> <time_remain>\n
+//   Request:  STARTCOUNTDOWN <seconds> <user_id(optional)>\n
+//   Response: ACK <status_code>\n   (1 = success, 0 = fail)
+//   Request:  STOPCOUNTDOWN\n
+//   Response: ACK <status_code>\n
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <time.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#define LINE_BUF_SIZE 256
+// Send a full line to the server
+static int send_line(int fd, const char *line)
+{
+    size_t len = strlen(line);
+    size_t sent = 0;
+    while (sent < len) {
+        ssize_t n = send(fd, line + sent, len - sent, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue; // retry on signal
+            perror("send");
+            return -1;
+        }
+        if (n == 0) return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
+// Receive one full command line 
+static int recv_line(int fd, char *buf, size_t size)
+{
+    size_t pos = 0;
+    while (pos < size - 1) {
+        char c;
+        ssize_t n = recv(fd, &c, 1, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            perror("recv");
+            return -1;
+        }
+        if (n == 0) {
+            if (pos == 0) return 0; // connection closed
+            break;
+        }
+        if (c == '\n') break;
+        buf[pos++] = c;
+    }
+    buf[pos] = '\0';
+    return (int)pos;
+}
+// Equipment UI Simulation (LED + 7SEG)
+static void show_state(const char *user_id, int time_remain)
+{
+    if (time_remain > 0) {
+        printf("[EQUIP] IN USE | user=%s | remain=%d sec | LED: ON | 7SEG: %4d\n",user_id, time_remain, time_remain);
+    } else {
+        printf("[EQUIP] IDLE   | user=NONE | remain=0    | LED: OFF | 7SEG: ----\n");
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+    int port = atoi(argv[1]);
+    // Create TCP listening socket
+    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd < 0) {
+        perror("socket");
+        return EXIT_FAILURE;
+    }
+    // Allow reusing address after restart
+    int opt = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port        = htons(port);
+    if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        close(listen_fd);
+        return EXIT_FAILURE;
+    }
+    if (listen(listen_fd, 1) < 0) {
+        perror("listen");
+        close(listen_fd);
+        return EXIT_FAILURE;
+    }
+    printf("[EQUIP] Listening on port %d\n", port);
+    // Wait for server connection
+    struct sockaddr_in cliaddr;
+    socklen_t clilen = sizeof(cliaddr);
+    int conn_fd = accept(listen_fd, (struct sockaddr*)&cliaddr, &clilen);
+    if (conn_fd < 0) {
+        perror("accept");
+        close(listen_fd);
+        return EXIT_FAILURE;
+    }
+    printf("[EQUIP] Connected by server.\n");
+    // Internal state variables
+    int running = 0;
+    time_t end_time = 0;
+    char current_user[32] = "NONE";
+    char line[LINE_BUF_SIZE];
+    int last_shown = -1;
+    while (1) {
+        // --- Update countdown timer & display state ---
+        time_t now = time(NULL);
+        int time_remain = 0;
+        if (running) {
+            if (now >= end_time) {
+                // Countdown finished
+                running = 0;
+                snprintf(current_user, sizeof(current_user), "NONE");
+            } else {
+                time_remain = (int)(end_time - now);
+            }
+        }
+        // Refresh console when value changes
+        if (time_remain != last_shown || !running) {
+            show_state(current_user, time_remain);
+            last_shown = time_remain;
+        }
+        // --- Check server commands with timeout (1 sec update cycle) ---
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(conn_fd, &rfds);
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        int ready = select(conn_fd + 1, &rfds, NULL, NULL, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            perror("select");
+            break;
+        }
+        if (ready == 0) continue; // timeout → next loop refresh
+        if (!FD_ISSET(conn_fd, &rfds)) continue;
+        int n = recv_line(conn_fd, line, sizeof(line));
+        if (n <= 0) {
+            printf("[EQUIP] Server disconnected.\n");
+            break;
+        }
+        // Command parsing
+        char cmd[64];
+        int seconds = 0;
+        char user_from_cmd[32] = "USER";  // Default placeholder
+        // Parse variable format command
+        if (sscanf(line, "%63s %d %31s", cmd, &seconds, user_from_cmd) >= 1) {
+            if (strcmp(cmd, "GETSTATUS") == 0) {
+                // Return format: "<user> <time_remain>"
+                char resp[LINE_BUF_SIZE];
+                snprintf(resp, sizeof(resp), "%s %d\n",
+                         running ? current_user : "NONE",
+                         running ? time_remain : 0);
+                send_line(conn_fd, resp);
+            }
+            else if (strcmp(cmd, "STARTCOUNTDOWN") == 0) {
+                // Allow overriding existing countdown (waiting → in-use)
+                if (seconds > 0) {
+                    running = 1;
+                    end_time = time(NULL) + seconds;
+                    snprintf(current_user, sizeof(current_user), "%s",
+                             user_from_cmd);
+                    last_shown = -1;
+                    send_line(conn_fd, "ACK 1\n");
+                } else {
+                    send_line(conn_fd, "ACK 0\n");
+                }
+            }
+            else if (strcmp(cmd, "STOPCOUNTDOWN") == 0) {
+                if (running) {
+                    running = 0;
+                    end_time = 0;
+                    snprintf(current_user, sizeof(current_user), "NONE");
+                    last_shown = -1;
+                    send_line(conn_fd, "ACK 1\n");
+                } else {
+                    send_line(conn_fd, "ACK 0\n");
+                }
+            }
+            else {
+                // Undefined or unsupported command
+                send_line(conn_fd, "ACK 0\n");
+            }
+        }
+    }
+    close(conn_fd);
+    close(listen_fd);
+    return 0;
+}
