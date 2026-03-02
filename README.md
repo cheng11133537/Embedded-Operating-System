@@ -4,7 +4,7 @@
 
 本課程的實作涵蓋了作業系統最核心的幾個維度：從底層的 Linux Kernel 核心優化與重編譯、字元裝置驅動程式開發，一路延伸至應用層的 Multi-process 併發伺服器架構、進階的行程間通訊 (IPC) 與同步機制，最終整合為一套具備 IoT 邊緣裝置通訊能力的「分散式器材預約與管理系統」。
 
-## 🛠️ 開發與測試環境
+##  開發與測試環境
 
 * **硬體平台:** Raspberry Pi (樹莓派)
 * **作業系統:** Linux (Raspberry Pi OS) / Custom Real-Time Kernel
